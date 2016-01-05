@@ -345,7 +345,7 @@ func (p *Privileges) close() {
 	p.db.Close()
 }
 
-func (p *Privileges) restore(path string) error {
+func (p *Privileges) Restore(path string) error {
 
 	p.close()
 
@@ -360,7 +360,7 @@ func (p *Privileges) restore(path string) error {
 
 }
 
-func (p *Privileges) snapshot() ([]byte, error) {
+func (p *Privileges) Snapshot() ([]byte, error) {
 
 	return ioutil.ReadFile(p.path)
 

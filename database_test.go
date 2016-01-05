@@ -390,7 +390,7 @@ func TestBackup(t *testing.T) {
 	p.Login(rootName, rootPass)
 	root.NewGroup("backup")
 
-	file, err := p.snapshot()
+	file, err := p.Snapshot()
 	if err != nil {
 		t.Error(nil)
 	}
@@ -406,12 +406,12 @@ func TestBackup(t *testing.T) {
 		t.Error(nil)
 	}
 
-	err = p.restore("./backup2")
+	err = p.Restore("./backup2")
 	if err == nil {
 		t.Error(nil)
 	}
 
-	err = p.restore("./backup")
+	err = p.Restore("./backup")
 	if err != nil {
 		t.Error(nil)
 	}
