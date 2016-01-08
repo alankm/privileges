@@ -11,10 +11,6 @@ func NewRules(owner, group, rules string) (*Rules, error) {
 		return nil, errBadRulesString
 	}
 
-	if len(rules) != 4 || rules[0] != '0' {
-		return nil, errBadRulesString
-	}
-
 	var a uint16
 	for i := 1; i < 4; i++ {
 		a = a<<4 | uint16(rules[i]-'0')

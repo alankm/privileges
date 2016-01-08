@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"io/ioutil"
-	"os"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
@@ -32,16 +31,13 @@ type record struct {
 
 func New(path string) (*Privileges, error) {
 
-	var err error
 	p := new(Privileges)
 	p.path = path
 	p.db, _ = sql.Open("sqlite3_fk", p.path)
-
-	err = p.setup()
+	err := p.setup()
 	if err != nil {
-		return nil, err
+		return p, err
 	}
-
 	p.sessions = make(map[string]bool)
 
 	return p, nil
@@ -60,22 +56,12 @@ func (p *Privileges) Snapshot() ([]byte, error) {
 
 }
 
-func (p *Privileges) Restore(path string) error {
+func (p *Privileges) Restore(snapshot []byte) error {
 
 	p.Close()
-
-	err := os.Rename(path, p.path)
-	if err != nil {
-		return err
-	}
-
+	ioutil.WriteFile(p.path, snapshot, 0775)
 	p.db, _ = sql.Open("sqlite3_fk", p.path)
-	err = p.setup()
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return p.setup()
 
 }
 
@@ -294,6 +280,13 @@ func (p *Privileges) newUserHash(username, salt, hash string) error {
 
 func (p *Privileges) changePassword(username, salt, hashword string) error {
 
+	row := p.db.QueryRow("SELECT * FROM users WHERE name=?", username)
+	rec := new(record)
+	err := row.Scan(&rec.name, &rec.salt, &rec.pass, &rec.gid, &rec.umask)
+	if err != nil {
+		return err
+	}
+
 	if len(salt) != 64 {
 		return errBadSalt
 	}
@@ -302,7 +295,7 @@ func (p *Privileges) changePassword(username, salt, hashword string) error {
 		return errBadHash
 	}
 
-	_, err := p.db.Exec("UPDATE users SET salt=?, pass=? WHERE name=?", salt, hash, username)
+	_, err = p.db.Exec("UPDATE users SET salt=?, pass=? WHERE name=?", salt, hash, username)
 	return err
 
 }

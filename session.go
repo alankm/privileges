@@ -119,7 +119,14 @@ func (s *Session) Umask(mask string) (string, error) {
 		return s.umask, nil
 	}
 
-	return "", s.p.setUmask(mask, s.User)
+	err := s.p.setUmask(mask, s.User)
+	if err != nil {
+		return "", err
+	}
+
+	s.umask = mask
+
+	return "", nil
 
 }
 
