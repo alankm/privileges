@@ -5,22 +5,139 @@ import (
 	"crypto/sha512"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"io/ioutil"
 	"os"
 
-	// driver for sqlite3
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
-const (
-	rootName  = "root"
-	rootPass  = "guest"
-	rootGroup = "sudo"
+var (
+	root         = "root"
+	rootPassword = "guest"
 )
 
+type Privileges struct {
+	sessions map[string]bool
+	db       *sql.DB
+	path     string
+}
+
+type record struct {
+	name  string
+	salt  string
+	pass  string
+	gid   string
+	umask string
+}
+
+func New(path string) (*Privileges, error) {
+
+	var err error
+	p := new(Privileges)
+	p.path = path
+	p.db, _ = sql.Open("sqlite3_fk", p.path)
+
+	err = p.setup()
+	if err != nil {
+		return nil, err
+	}
+
+	p.sessions = make(map[string]bool)
+
+	return p, nil
+
+}
+
+func (p *Privileges) Close() {
+
+	p.db.Close()
+
+}
+
+func (p *Privileges) Snapshot() ([]byte, error) {
+
+	return ioutil.ReadFile(p.path)
+
+}
+
+func (p *Privileges) Restore(path string) error {
+
+	p.Close()
+
+	err := os.Rename(path, p.path)
+	if err != nil {
+		return err
+	}
+
+	p.db, _ = sql.Open("sqlite3_fk", p.path)
+	err = p.setup()
+	if err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
+func (p *Privileges) Login(username, password string) (*Session, error) {
+
+	rec := new(record)
+	row := p.db.QueryRow("SELECT * FROM users WHERE name=?", username)
+	err := row.Scan(&rec.name, &rec.salt, &rec.pass, &rec.gid, &rec.umask)
+	if err != nil {
+		return nil, errBadCredentials
+	}
+
+	hashword, err := hash(rec.salt, password)
+	if err != nil || hashword != rec.pass {
+		return nil, errBadCredentials
+	}
+
+	s := new(Session)
+	s.p = p
+	s.User = username
+	s.Hash = hashword
+	s.gid = rec.gid
+	s.umask = rec.umask
+	s.SID = string(generateSalt64())
+	s.groups, _ = p.userListGroups(username)
+	s.su, _ = p.inGroup(username, root)
+	p.sessions[s.SID] = true
+
+	return s, nil
+
+}
+
+func (p *Privileges) LoginHash(username, hashword string) (*Session, error) {
+
+	rec := new(record)
+	row := p.db.QueryRow("SELECT * FROM users WHERE name=?", username)
+	err := row.Scan(&rec.name, &rec.salt, &rec.pass, &rec.gid, &rec.umask)
+	if err != nil {
+		return nil, errBadCredentials
+	}
+
+	if err != nil || hashword != rec.pass {
+		return nil, errBadCredentials
+	}
+
+	s := new(Session)
+	s.p = p
+	s.User = username
+	s.Hash = hashword
+	s.gid = rec.gid
+	s.umask = rec.umask
+	s.SID = string(generateSalt64())
+	s.groups, _ = p.userListGroups(username)
+	s.su, _ = p.inGroup(username, root)
+	p.sessions[s.SID] = true
+
+	return s, nil
+
+}
+
 func init() {
-	sql.Register("sqlite3_with_foreign_keys",
+	sql.Register("sqlite3_fk",
 		&sqlite3.SQLiteDriver{
 			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
 				_, err := conn.Exec("PRAGMA foreign_keys = ON", nil)
@@ -29,111 +146,19 @@ func init() {
 		})
 }
 
-func loadDatabase(path string) (*Privileges, error) {
+func hash(salt, password string) (string, error) {
 
-	p := new(Privileges)
-	p.path = path
-	p.db, _ = sql.Open("sqlite3_with_foreign_keys", p.path)
-	p.setup()
-	return p, nil
-
-}
-
-func (p *Privileges) setup() {
-
-	p.createGroupsTable()
-	p.createUsersTable()
-	p.createUsersGroupsTable()
-	p.createStandardEntries()
-
-}
-
-func (p *Privileges) createGroupsTable() {
-
-	p.db.Exec("CREATE TABLE IF NOT EXISTS groups (" +
-		"name VARCHAR(64) PRIMARY KEY);")
-
-}
-
-func (p *Privileges) createUsersTable() {
-
-	p.db.Exec("CREATE TABLE IF NOT EXISTS users (" +
-		"name VARCHAR(64) PRIMARY KEY, " +
-		"salt VARCHAR(128) NULL, " +
-		"pass VARCHAR(128) NULL, " +
-		"gid VARCHAR(64) NULL, " +
-		"FOREIGN KEY (gid) REFERENCES groups(name)" +
-		");")
-
-}
-
-func (p *Privileges) createUsersGroupsTable() {
-
-	p.db.Exec("CREATE TABLE IF NOT EXISTS usersgroups (" +
-		"username VARCHAR(64) NULL, " +
-		"groupname VARCHAR(64) NULL, " +
-		"PRIMARY KEY (username, groupname), " +
-		"FOREIGN KEY (username) REFERENCES users(name) ON DELETE CASCADE, " +
-		"FOREIGN KEY (groupname) REFERENCES groups(name) ON DELETE CASCADE" +
-		");")
-
-}
-
-func (p *Privileges) createStandardEntries() {
-
-	p.newGroup(rootGroup)
-	p.newUser(rootName, rootPass)
-	p.addToGroup(rootName, rootGroup)
-
-}
-
-func (p *Privileges) login(user *Key, password string) error {
-
-	var username, salt, pass, gid string
-	row := p.db.QueryRow("SELECT * FROM users WHERE name=?", user.username)
-	err := row.Scan(&username, &salt, &pass, &gid)
+	rawSalt, err := hex.DecodeString(salt)
 	if err != nil {
-		return errors.New("invalid username or password")
+		return "", err
 	}
 
-	user.hashword, err = hash(salt, password)
-	if err != nil || user.hashword != pass {
-		return errors.New("invalid username or password")
-	}
+	hasher := sha512.New()
+	hasher.Write(rawSalt)
+	hasher.Write([]byte(password))
+	hashStr := hex.EncodeToString(hasher.Sum(nil))
 
-	return nil
-
-}
-
-func (p *Privileges) newGroup(name string) error {
-
-	_, err := p.db.Exec("INSERT INTO groups(name) VALUES(?)", name)
-	return err
-
-}
-
-func (p *Privileges) newUser(username, password string) error {
-
-	p.newGroup(username)
-	salt, hash := saltAndHash(password)
-	_, err := p.db.Exec("INSERT INTO users(name, salt, pass, gid) VALUES(?, ?, ?, ?)", username, salt, hash, username)
-	return err
-
-}
-
-func (p *Privileges) addToGroup(user, group string) error {
-
-	_, err := p.db.Exec("INSERT INTO usersgroups(username, groupname) VALUES(?, ?)", user, group)
-	return err
-
-}
-
-func (p *Privileges) inGroup(username, group string) bool {
-
-	var x string
-	row := p.db.QueryRow("SELECT * FROM usersgroups WHERE username=? AND groupname=?", username, group)
-	err := row.Scan(&x, &x)
-	return err == nil
+	return hashStr, nil
 
 }
 
@@ -159,71 +184,154 @@ func saltAndHash(password string) (string, string) {
 
 }
 
-func hash(salt, password string) (string, error) {
+func (p *Privileges) setup() error {
 
-	rawSalt, err := hex.DecodeString(salt)
+	var err error
+	err = p.createGroupsTable()
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	hasher := sha512.New()
-	hasher.Write(rawSalt)
-	hasher.Write([]byte(password))
-	hashStr := hex.EncodeToString(hasher.Sum(nil))
+	p.createUsersTable()
+	p.createUsersGroupsTable()
+	p.createStandardEntries()
 
-	return hashStr, nil
+	return nil
 
 }
 
-func (key *Key) valid() bool {
+func (p *Privileges) createGroupsTable() error {
 
-	var user, salt, pass, gid string
-	row := key.p.db.QueryRow("SELECT * FROM users WHERE name=?", key.username)
-	err := row.Scan(&user, &salt, &pass, &gid)
+	_, err := p.db.Exec("CREATE TABLE IF NOT EXISTS groups (name VARCHAR(64) PRIMARY KEY);")
+	return err
+
+}
+
+func (p *Privileges) createUsersTable() {
+
+	p.db.Exec("CREATE TABLE IF NOT EXISTS users (" +
+		"name VARCHAR(64) PRIMARY KEY, " +
+		"salt VARCHAR(128) NULL, " +
+		"pass VARCHAR(128) NULL, " +
+		"gid VARCHAR(64) NULL, " +
+		"umask VARCHAR(4) NULL, " +
+		"FOREIGN KEY (gid) REFERENCES groups(name)" +
+		");")
+
+}
+
+func (p *Privileges) createUsersGroupsTable() {
+
+	p.db.Exec("CREATE TABLE IF NOT EXISTS usersgroups (" +
+		"username VARCHAR(64) NULL, " +
+		"groupname VARCHAR(64) NULL, " +
+		"PRIMARY KEY (username, groupname), " +
+		"FOREIGN KEY (username) REFERENCES users(name) ON DELETE CASCADE, " +
+		"FOREIGN KEY (groupname) REFERENCES groups(name) ON DELETE CASCADE" +
+		");")
+
+}
+
+func (p *Privileges) createStandardEntries() {
+
+	p.newUser(root, rootPassword)
+
+}
+
+func (p *Privileges) newGroup(name string) error {
+
+	if name == "" {
+		return errBadName
+	}
+
+	_, err := p.db.Exec("INSERT INTO groups(name) VALUES(?)", name)
+	return err
+
+}
+
+func (p *Privileges) newUser(username, password string) error {
+
+	if username == "" {
+		return errBadName
+	}
+
+	err := p.newGroup(username)
 	if err != nil {
-		return false
+		return err
 	}
 
-	if pass == key.hashword {
-		return true
-	}
-
-	return false
+	salt, hash := saltAndHash(password)
+	p.db.Exec("INSERT INTO users(name, salt, pass, gid, umask) VALUES(?, ?, ?, ?, ?)", username, salt, hash, username, "0002")
+	p.addToGroup(username, username)
+	return nil
 
 }
 
-func (key *Key) su() bool {
+func (p *Privileges) newUserHash(username, salt, hash string) error {
 
-	return key.p.inGroup(key.username, rootGroup)
+	if username == "" {
+		return errBadName
+	}
+
+	if len(salt) != 64 {
+		return errBadSalt
+	}
+
+	if len(hash) != 64 {
+		return errBadHash
+	}
+
+	err := p.newGroup(username)
+	if err != nil {
+		return err
+	}
+
+	p.db.Exec("INSERT INTO users(name, salt, pass, gid, umask) VALUES(?, ?, ?, ?, ?)", username, salt, hash, username, "0002")
+	p.addToGroup(username, username)
+	return nil
 
 }
 
-func (p *Privileges) isGroup(group string) bool {
+func (p *Privileges) changePassword(username, salt, hashword string) error {
+
+	if len(salt) != 64 {
+		return errBadSalt
+	}
+
+	if len(hashword) != 64 {
+		return errBadHash
+	}
+
+	_, err := p.db.Exec("UPDATE users SET salt=?, pass=? WHERE name=?", salt, hash, username)
+	return err
+
+}
+
+func (p *Privileges) addToGroup(user, group string) error {
+
+	_, err := p.db.Exec("INSERT INTO usersgroups(username, groupname) VALUES(?, ?)", user, group)
+	return err
+
+}
+
+func (p *Privileges) inGroup(username, group string) (bool, error) {
 
 	var x string
-	row := p.db.QueryRow("SELECT name FROM groups WHERE name=?", group)
-	err := row.Scan(&x)
-	return err == nil
+	row := p.db.QueryRow("SELECT * FROM usersgroups WHERE username=? AND groupname=?", username, group)
+	err := row.Scan(&x, &x)
+	return err == nil, err
 
 }
 
-func (p *Privileges) isUser(username string) bool {
-
-	var x string
-	row := p.db.QueryRow("SELECT name FROM users WHERE name=?", username)
-	err := row.Scan(&x)
-	return err == nil
-
-}
-
-func (p *Privileges) listGroups() []string {
+func (p *Privileges) userListGroups(username string) ([]string, error) {
 
 	var groups []string
 
-	rows, err := p.db.Query("SELECT name FROM groups")
+	rows, err := p.db.Query("SELECT groupname FROM usersgroups WHERE username=?", username)
 	if err != nil {
-		return nil
+		return nil, err
 	}
+	defer rows.Close()
 
 	var name string
 	for rows.Next() {
@@ -231,57 +339,47 @@ func (p *Privileges) listGroups() []string {
 		groups = append(groups, name)
 	}
 
-	return groups
+	return groups, nil
 
 }
 
-func (p *Privileges) listUsers() []string {
+func (p *Privileges) deleteUser(username string) error {
 
-	var users []string
+	if username == root {
+		return errRoot
+	}
 
-	rows, err := p.db.Query("SELECT name FROM users")
+	_, err := p.db.Exec("DELETE FROM users WHERE name=?", username)
+	return err
+
+}
+
+func (p *Privileges) deleteGroup(group string) error {
+
+	if group == root {
+		return errRoot
+	}
+
+	users, err := p.listUsersWithGid(group)
 	if err != nil {
-		return nil
+		return err
 	}
-	defer rows.Close()
-
-	var name string
-	for rows.Next() {
-		rows.Scan(&name)
-		users = append(users, name)
+	if users != nil && len(users) != 0 {
+		return errGroupHasGids
 	}
 
-	return users
+	_, err = p.db.Exec("DELETE FROM groups WHERE name=?", group)
+	return err
 
 }
 
-func (p *Privileges) listUsersGroups(user string) []string {
-
-	var groups []string
-
-	rows, err := p.db.Query("SELECT groupname FROM usersgroups WHERE username=?", user)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-
-	var name string
-	for rows.Next() {
-		rows.Scan(&name)
-		groups = append(groups, name)
-	}
-
-	return groups
-
-}
-
-func (p *Privileges) listUsersWithGid(group string) []string {
+func (p *Privileges) listUsersWithGid(group string) ([]string, error) {
 
 	var users []string
 
 	rows, err := p.db.Query("SELECT name FROM users WHERE gid=?", group)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -291,20 +389,33 @@ func (p *Privileges) listUsersWithGid(group string) []string {
 		users = append(users, user)
 	}
 
-	return users
+	return users, nil
 
 }
 
-func (p *Privileges) deleteUser(username string) error {
+func (p *Privileges) setGid(username, group string) error {
 
-	_, err := p.db.Exec("DELETE FROM users WHERE name=?", username)
+	_, err := p.db.Exec("UPDATE users SET gid=? WHERE name=?", group, username)
 	return err
 
 }
 
-func (p *Privileges) deleteGroup(group string) error {
+func (p *Privileges) gid(username string) (string, error) {
 
-	_, err := p.db.Exec("DELETE FROM groups WHERE name=?", group)
+	var gid string
+	row := p.db.QueryRow("SELECT gid FROM users WHERE name=?", username)
+	err := row.Scan(&gid)
+	return gid, err
+
+}
+
+func (p *Privileges) setUmask(mask, username string) error {
+
+	if !validRules(mask) {
+		return errBadRulesString
+	}
+
+	_, err := p.db.Exec("UPDATE users SET umask=? WHERE name=?", mask, username)
 	return err
 
 }
@@ -316,52 +427,41 @@ func (p *Privileges) removeFromGroup(user, group string) error {
 
 }
 
-func (p *Privileges) changePassword(username, password string) error {
+func (p *Privileges) listGroups() ([]string, error) {
 
-	salt, hash := saltAndHash(password)
+	var groups []string
 
-	_, err := p.db.Exec("UPDATE users SET salt=?, pass=? WHERE name=?", salt, hash, username)
-	return err
-
-}
-
-func (p *Privileges) setGid(username, group string) error {
-
-	_, err := p.db.Exec("UPDATE users SET gid=? WHERE name=?", group, username)
-	return err
-
-}
-
-func (p *Privileges) gid(username string) string {
-
-	var gid string
-	row := p.db.QueryRow("SELECT gid FROM users WHERE name=?", username)
-	row.Scan(&gid)
-	return gid
-
-}
-
-func (p *Privileges) close() {
-	p.db.Close()
-}
-
-func (p *Privileges) Restore(path string) error {
-
-	p.close()
-
-	err := os.Rename(path, p.path)
+	rows, err := p.db.Query("SELECT name FROM groups")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	p.db, _ = sql.Open("sqlite3_with_foreign_keys", p.path)
+	var name string
+	for rows.Next() {
+		rows.Scan(&name)
+		groups = append(groups, name)
+	}
 
-	return nil
+	return groups, nil
 
 }
 
-func (p *Privileges) Snapshot() ([]byte, error) {
+func (p *Privileges) listUsers() ([]string, error) {
 
-	return ioutil.ReadFile(p.path)
+	var users []string
+
+	rows, err := p.db.Query("SELECT name FROM users")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var name string
+	for rows.Next() {
+		rows.Scan(&name)
+		users = append(users, name)
+	}
+
+	return users, nil
 
 }
