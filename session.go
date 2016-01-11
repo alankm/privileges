@@ -183,86 +183,70 @@ func (s *Session) valid() bool {
 
 }
 
-func (s *Session) Read(p Privileged) (interface{}, error) {
+func (s *Session) CanRead(p Privileged) bool {
 	r := p.Rules()
 	if s.User == r.Owner() {
-		if r.rules>>8&4 == 4 {
-			return p.Read(), nil
-		} else {
-			return nil, errDenied
-		}
+		return r.rules>>8&4 == 4
 	}
 
 	for _, g := range s.groups {
 		if g == r.Group() {
-			if r.rules>>4&4 == 4 {
-				return p.Read(), nil
-			} else {
-				return nil, errDenied
-			}
+			return r.rules>>4&4 == 4
 		}
 	}
 
-	if r.rules&4 == 4 {
+	return r.rules&4 == 4
+
+}
+
+func (s *Session) Read(p Privileged) (interface{}, error) {
+	if s.CanRead(p) {
 		return p.Read(), nil
-	} else {
-		return nil, errDenied
+	}
+	return nil, errDenied
+
+}
+
+func (s *Session) CanWrite(p Privileged) bool {
+	r := p.Rules()
+	if s.User == r.Owner() {
+		return r.rules>>8&2 == 2
 	}
 
+	for _, g := range s.groups {
+		if g == r.Group() {
+			return r.rules>>4&2 == 2
+		}
+	}
+
+	return r.rules&2 == 2
 }
 
 func (s *Session) Write(p Privileged) (interface{}, error) {
+	if s.CanWrite(p) {
+		return p.Write(), nil
+	}
+	return nil, errDenied
+}
+
+func (s Session) CanExec(p Privileged) bool {
 	r := p.Rules()
 	if s.User == r.Owner() {
-		if r.rules>>8&2 == 2 {
-			return p.Write(), nil
-		} else {
-			return nil, errDenied
-		}
+		return r.rules>>8&1 == 1
 	}
 
 	for _, g := range s.groups {
 		if g == r.Group() {
-			if r.rules>>4&2 == 2 {
-				return p.Write(), nil
-			} else {
-				return nil, errDenied
-			}
+			return r.rules>>4&1 == 1
 		}
 	}
 
-	if r.rules&2 == 2 {
-		return p.Write(), nil
-	} else {
-		return nil, errDenied
-	}
-
+	return r.rules&1 == 1
 }
 
 func (s *Session) Exec(p Privileged) (interface{}, error) {
-	r := p.Rules()
-	if s.User == r.Owner() {
-		if r.rules>>8&1 == 1 {
-			return p.Exec(), nil
-		} else {
-			return nil, errDenied
-		}
-	}
-
-	for _, g := range s.groups {
-		if g == r.Group() {
-			if r.rules>>4&1 == 1 {
-				return p.Exec(), nil
-			} else {
-				return nil, errDenied
-			}
-		}
-	}
-
-	if r.rules&1 == 1 {
+	if s.CanExec(p) {
 		return p.Exec(), nil
-	} else {
-		return nil, errDenied
 	}
-
+	return nil, errDenied
 }
