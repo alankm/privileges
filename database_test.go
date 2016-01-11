@@ -126,7 +126,7 @@ func TestDB003(t *testing.T) {
 }
 
 func TestDB004(t *testing.T) {
-	_, err = hash("XCVBNM", "")
+	_, err = Hash("XCVBNM", "")
 	if err == nil {
 		t.Error(nil)
 	}

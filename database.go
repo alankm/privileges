@@ -74,7 +74,7 @@ func (p *Privileges) Login(username, password string) (*Session, error) {
 		return nil, errBadCredentials
 	}
 
-	hashword, err := hash(rec.salt, password)
+	hashword, err := Hash(rec.salt, password)
 	if err != nil || hashword != rec.pass {
 		return nil, errBadCredentials
 	}
@@ -85,7 +85,7 @@ func (p *Privileges) Login(username, password string) (*Session, error) {
 	s.Hash = hashword
 	s.gid = rec.gid
 	s.umask = rec.umask
-	s.SID = string(generateSalt64())
+	s.SID = string(GenerateSalt64())
 	s.groups, _ = p.userListGroups(username)
 	s.su, _ = p.inGroup(username, root)
 	p.sessions[s.SID] = true
@@ -113,7 +113,7 @@ func (p *Privileges) LoginHash(username, hashword string) (*Session, error) {
 	s.Hash = hashword
 	s.gid = rec.gid
 	s.umask = rec.umask
-	s.SID = string(generateSalt64())
+	s.SID = string(GenerateSalt64())
 	s.groups, _ = p.userListGroups(username)
 	s.su, _ = p.inGroup(username, root)
 	p.sessions[s.SID] = true
@@ -132,7 +132,7 @@ func init() {
 		})
 }
 
-func hash(salt, password string) (string, error) {
+func Hash(salt, password string) (string, error) {
 
 	rawSalt, err := hex.DecodeString(salt)
 	if err != nil {
@@ -148,7 +148,7 @@ func hash(salt, password string) (string, error) {
 
 }
 
-func generateSalt64() []byte {
+func GenerateSalt64() []byte {
 
 	salt := make([]byte, 64)
 	rand.Read(salt)
@@ -158,7 +158,7 @@ func generateSalt64() []byte {
 
 func saltAndHash(password string) (string, string) {
 
-	salt := generateSalt64()
+	salt := GenerateSalt64()
 	hasher := sha512.New()
 	hasher.Write(salt)
 	hasher.Write([]byte(password))
@@ -221,6 +221,7 @@ func (p *Privileges) createUsersGroupsTable() {
 func (p *Privileges) createStandardEntries() {
 
 	p.newUser(root, rootPassword)
+	p.newUser("guest", "")
 
 }
 
@@ -253,17 +254,17 @@ func (p *Privileges) newUser(username, password string) error {
 
 }
 
-func (p *Privileges) newUserHash(username, salt, hash string) error {
+func (p *Privileges) newUserHash(username, salt, hashword string) error {
 
 	if username == "" {
 		return errBadName
 	}
 
-	if len(salt) != 64 {
+	if len(salt) != 128 {
 		return errBadSalt
 	}
 
-	if len(hash) != 64 {
+	if len(hashword) != 128 {
 		return errBadHash
 	}
 
@@ -272,7 +273,7 @@ func (p *Privileges) newUserHash(username, salt, hash string) error {
 		return err
 	}
 
-	p.db.Exec("INSERT INTO users(name, salt, pass, gid, umask) VALUES(?, ?, ?, ?, ?)", username, salt, hash, username, "0002")
+	p.db.Exec("INSERT INTO users(name, salt, pass, gid, umask) VALUES(?, ?, ?, ?, ?)", username, salt, hashword, username, "0002")
 	p.addToGroup(username, username)
 	return nil
 
@@ -287,15 +288,15 @@ func (p *Privileges) changePassword(username, salt, hashword string) error {
 		return err
 	}
 
-	if len(salt) != 64 {
+	if len(salt) != 128 {
 		return errBadSalt
 	}
 
-	if len(hashword) != 64 {
+	if len(hashword) != 128 {
 		return errBadHash
 	}
 
-	_, err = p.db.Exec("UPDATE users SET salt=?, pass=? WHERE name=?", salt, hash, username)
+	_, err = p.db.Exec("UPDATE users SET salt=?, pass=? WHERE name=?", salt, hashword, username)
 	return err
 
 }
