@@ -2,9 +2,9 @@ package privileges
 
 type Privileged interface {
 	Rules() *Rules
-	Read() interface{}
-	Write() interface{}
-	Exec() interface{}
+	Read(...string) interface{}
+	Write(...string) interface{}
+	Exec(...string) interface{}
 }
 
 type Session struct {
@@ -199,9 +199,9 @@ func (s *Session) CanRead(p Privileged) bool {
 
 }
 
-func (s *Session) Read(p Privileged) (interface{}, error) {
+func (s *Session) Read(p Privileged, args ...string) (interface{}, error) {
 	if s.CanRead(p) {
-		return p.Read(), nil
+		return p.Read(args...), nil
 	}
 	return nil, errDenied
 
@@ -222,9 +222,9 @@ func (s *Session) CanWrite(p Privileged) bool {
 	return r.rules&2 == 2
 }
 
-func (s *Session) Write(p Privileged) (interface{}, error) {
+func (s *Session) Write(p Privileged, args ...string) (interface{}, error) {
 	if s.CanWrite(p) {
-		return p.Write(), nil
+		return p.Write(args...), nil
 	}
 	return nil, errDenied
 }
@@ -244,9 +244,74 @@ func (s Session) CanExec(p Privileged) bool {
 	return r.rules&1 == 1
 }
 
-func (s *Session) Exec(p Privileged) (interface{}, error) {
+func (s *Session) Exec(p Privileged, args ...string) (interface{}, error) {
 	if s.CanExec(p) {
-		return p.Exec(), nil
+		return p.Exec(args...), nil
 	}
 	return nil, errDenied
+}
+
+func (s *Session) CanChgrp(r *Rules, group string) bool {
+	in := false
+	for _, grp := range s.groups {
+		if grp == group {
+			in = true
+			break
+		}
+	}
+
+	if in && r.Owner() == s.User {
+		return true
+	}
+
+	if in && s.su {
+		return true
+	}
+
+	if s.su {
+		rows, err := s.p.db.Query("SELECT * FROM groups WHERE name=?", group)
+		if err != nil {
+			return false
+		}
+		defer rows.Close()
+
+		if rows.Next() {
+			return true
+		}
+	}
+
+	return false
+
+}
+
+func (s *Session) CanChown(r *Rules, owner string) bool {
+
+	if s.su {
+		rows, err := s.p.db.Query("SELECT * FROM users WHERE name=?", owner)
+		if err != nil {
+			return false
+		}
+		defer rows.Close()
+
+		if rows.Next() {
+			return true
+		}
+	}
+
+	return false
+
+}
+
+func (s *Session) CanChmod(r *Rules, mode string) bool {
+
+	if !validRules(mode) {
+		return false
+	}
+
+	if r.Owner() == s.User || s.su {
+		return true
+	}
+
+	return false
+
 }

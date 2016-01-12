@@ -248,7 +248,7 @@ func (p *Privileges) newUser(username, password string) error {
 	}
 
 	salt, hash := saltAndHash(password)
-	p.db.Exec("INSERT INTO users(name, salt, pass, gid, umask) VALUES(?, ?, ?, ?, ?)", username, salt, hash, username, "0002")
+	p.db.Exec("INSERT INTO users(name, salt, pass, gid, umask) VALUES(?, ?, ?, ?, ?)", username, salt, hash, username, "0775")
 	p.addToGroup(username, username)
 	return nil
 

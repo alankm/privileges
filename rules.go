@@ -52,3 +52,54 @@ func (r *Rules) Owner() string {
 func (r *Rules) Group() string {
 	return r.group
 }
+
+func (r *Rules) Symbolic(directory bool) string {
+	sym := []byte("----------")
+	if directory {
+		sym[0] = 'd'
+	}
+
+	if r.rules>>10&1 == 1 {
+		sym[1] = 'r'
+	}
+
+	if r.rules>>9&1 == 1 {
+		sym[2] = 'w'
+	}
+
+	if r.rules>>8&1 == 1 {
+		sym[3] = 'x'
+	}
+
+	if r.rules>>6&1 == 1 {
+		sym[4] = 'r'
+	}
+
+	if r.rules>>5&1 == 1 {
+		sym[5] = 'w'
+	}
+
+	if r.rules>>4&1 == 1 {
+		sym[6] = 'x'
+	}
+
+	if r.rules>>2&1 == 1 {
+		sym[7] = 'r'
+	}
+
+	if r.rules>>1&1 == 1 {
+		sym[8] = 'w'
+	}
+
+	if r.rules>>0&1 == 1 {
+		sym[9] = 'x'
+	}
+
+	sym = append(sym, ' ')
+	sym = append(sym, []byte(r.owner)...)
+
+	sym = append(sym, ' ')
+	sym = append(sym, []byte(r.group)...)
+
+	return string(sym)
+}
