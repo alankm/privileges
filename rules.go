@@ -6,6 +6,22 @@ type Rules struct {
 	rules uint16
 }
 
+func (r *Rules) Rules() *Rules {
+	return r
+}
+
+func (r *Rules) Read(args ...string) interface{} {
+	return nil
+}
+
+func (r *Rules) Write(args ...string) interface{} {
+	return nil
+}
+
+func (r *Rules) Exec(args ...string) interface{} {
+	return nil
+}
+
 func NewRules(owner, group, rules string) (*Rules, error) {
 	if !validRules(rules) {
 		return nil, errBadRulesString
@@ -35,7 +51,7 @@ func validRules(rules string) bool {
 }
 
 // Rules returns the octal representation of the file's permissions (0777)
-func (r *Rules) Rules() string {
+func (r *Rules) Octal() string {
 	a := []byte("0")
 	for i := 2; i >= 0; i-- {
 		a = append(a, byte(r.rules>>(4*uint(i))&7+'0'))
